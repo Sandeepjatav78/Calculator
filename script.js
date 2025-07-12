@@ -1,28 +1,21 @@
-// DOM Element References
 const display = document.getElementById('display');
 const buttons = document.querySelector('.buttons');
 const historyList = document.getElementById('historyList');
-const historyDisplay = document.getElementById('historyDisplay');
 const clearHistoryBtn = document.getElementById('clearHistoryBtn');
-const containerWrapper = document.querySelector('.container-wrapper'); // Added reference to the container wrapper
+const containerWrapper = document.querySelector('.container-wrapper'); 
 
-// State Variables
 let currentInput = '0';
 let previousInput = '';
 let operator = null;
 let awaitingNextInput = false;
-let history = [];
+let lastCalculatedResult = null; 
 
-// Initialize the display
+let history = JSON.parse(localStorage.getItem('calculatorHistory')) || [];
+
 updateDisplay();
+updateHistoryDisplay();
 
-// --- Core Calculator Logic ---
-
-/**
- * Updates the display with the current input value.
- */
 function updateDisplay() {
-    // Limit display length to avoid overflow, adjust as needed
     if (currentInput.length > 15) {
         display.value = parseFloat(currentInput).toPrecision(10);
     } else {
@@ -30,15 +23,38 @@ function updateDisplay() {
     }
 }
 
-/**
- * Handles number button presses (0-9, .).
- * @param {string} number - The number or decimal point pressed.
- */
 function inputNumber(number) {
     if (awaitingNextInput) {
-        currentInput = number;
+        // If an operator was pressed, we are now typing the second number.
+        // We append the new number to the existing input string.
+        
+        // Handle the case where we start typing after a calculation result
+        if (operator === null && lastCalculatedResult !== null) {
+            currentInput = number;
+            lastCalculatedResult = null;
+        } else if (operator) {
+            // Check if the currentInput ends with the operator (e.g., "5+")
+            const lastChar = currentInput.slice(-1);
+            if (['+', '-', '*', '/'].includes(lastChar)) {
+                currentInput += number;
+            } else {
+                // If we are continuing to type the second number (e.g., typing '1' after '5+1')
+                currentInput += number;
+            }
+        } else {
+            // Handle standard input if awaitingNextInput is true but operator is null (e.g. after AC or initial load)
+            if (currentInput === '0' && number !== '.') {
+                currentInput = number;
+            } else if (number === '.' && currentInput.includes('.')) {
+                return;
+            } else {
+                currentInput += number;
+            }
+        }
         awaitingNextInput = false;
+
     } else {
+        // Standard number input (before operator)
         if (currentInput === '0' && number !== '.') {
             currentInput = number;
         } else if (number === '.' && currentInput.includes('.')) {
@@ -50,21 +66,35 @@ function inputNumber(number) {
     updateDisplay();
 }
 
-/**
- * Handles operator button presses (+, -, *, /).
- * @param {string} nextOperator - The operator pressed.
- */
 function inputOperator(nextOperator) {
-    const inputValue = parseFloat(currentInput);
-
-    if (operator && awaitingNextInput) {
-        operator = nextOperator;
-        return;
-    }
-
+    
     if (previousInput === '') {
-        previousInput = inputValue;
-    } else if (operator) {
+        // First operation: store the current display value as the first operand.
+        previousInput = parseFloat(currentInput);
+        currentInput += nextOperator;
+    } else if (awaitingNextInput) {
+        // If an operator is already set and we press another one (e.g., changing from + to *).
+        operator = nextOperator;
+        // Replace the existing operator symbol in the display
+        currentInput = currentInput.slice(0, -1) + nextOperator;
+    } else {
+        // Subsequent operation: We have Num1, Operator, and Num2 entered.
+        
+        // 1. Find the second operand (Num2) from the currentInput string.
+        // We assume currentInput contains 'previousInput' + 'operator' + 'Num2'
+        const opIndex = currentInput.lastIndexOf(operator);
+        const num2String = currentInput.substring(opIndex + 1);
+        const inputValue = parseFloat(num2String);
+
+        if (isNaN(inputValue)) {
+             // Handle cases where no second number was entered yet (e.g., '5+')
+             operator = nextOperator;
+             currentInput = currentInput.slice(0, -1) + nextOperator;
+             updateDisplay();
+             return;
+        }
+
+        // 2. Perform the calculation.
         const result = calculate(parseFloat(previousInput), inputValue, operator);
         
         if (result === 'Error') {
@@ -75,22 +105,17 @@ function inputOperator(nextOperator) {
 
         addToHistory(previousInput, inputValue, operator, result);
 
+        // 3. Update state for the next operation.
         previousInput = result;
-        currentInput = String(result);
+        currentInput = String(result) + nextOperator; 
     }
     
+    // Set the new operator and prepare for the next input
     operator = nextOperator;
     awaitingNextInput = true;
     updateDisplay();
 }
 
-/**
- * Performs the calculation based on the operator.
- * @param {number} num1 - The first number.
- * @param {number} num2 - The second number.
- * @param {string} op - The operator.
- * @returns {number|string} The result or 'Error' for division by zero.
- */
 function calculate(num1, num2, op) {
     switch (op) {
         case '+':
@@ -107,17 +132,24 @@ function calculate(num1, num2, op) {
     }
 }
 
-/**
- * Handles the 'equals' button press.
- */
 function handleEquals() {
     if (operator === null || awaitingNextInput) {
         return;
     }
 
-    const num1 = parseFloat(previousInput);
-    const num2 = parseFloat(currentInput);
-    const op = operator;
+    // Extract Num1 and Num2 for the final calculation.
+    let num1 = parseFloat(previousInput);
+    
+    // Extract Num2 by finding the substring after the operator.
+    const opIndex = currentInput.lastIndexOf(operator);
+    let num2 = parseFloat(currentInput.substring(opIndex + 1));
+    
+    // Handle cases where '=' is pressed right after an operator without a second number.
+    if (isNaN(num2)) {
+        num2 = parseFloat(currentInput);
+    }
+
+    let op = operator;
 
     const result = calculate(num1, num2, op);
 
@@ -130,37 +162,31 @@ function handleEquals() {
     addToHistory(num1, num2, op, result);
 
     currentInput = String(result);
-    previousInput = '';
-    operator = null;
+    previousInput = ''; // Reset for a new calculation
+    operator = null; 
     awaitingNextInput = true;
+    lastCalculatedResult = result;
     updateDisplay();
 }
 
 // --- Special Functionality ---
 
-/**
- * Clears the display and resets all state variables (AC).
- */
 function clearAll() {
     resetState();
     updateDisplay();
 }
 
-/**
- * Resets the calculator state variables.
- */
 function resetState() {
     currentInput = '0';
     previousInput = '';
     operator = null;
     awaitingNextInput = false;
+    lastCalculatedResult = null;
 }
 
-/**
- * Handles the 'DEL' (backspace) functionality.
- */
 function backspace() {
     if (awaitingNextInput) {
+        // If the user hasn't started typing the next number yet, just return.
         return;
     }
 
@@ -171,9 +197,6 @@ function backspace() {
     updateDisplay();
 }
 
-/**
- * Toggles the sign of the current input (+/-).
- */
 function toggleSign() {
     if (currentInput !== '0') {
         currentInput = (parseFloat(currentInput) * -1).toString();
@@ -181,35 +204,29 @@ function toggleSign() {
     }
 }
 
-/**
- * Handles the percentage calculation (%).
- */
 function calculatePercentage() {
     const value = parseFloat(currentInput);
     currentInput = (value / 100).toString();
     updateDisplay();
 }
 
-// --- History Management ---
+// --- History Management (Uses localStorage) ---
 
-/**
- * Adds a calculation entry to the history and updates the display.
- */
+function saveHistory() {
+    localStorage.setItem('calculatorHistory', JSON.stringify(history));
+}
+
 function addToHistory(num1, num2, op, result) {
-    // Ensure history entries are formatted correctly and potentially rounded for readability
     const formattedResult = parseFloat(result).toFixed(4);
     const calculation = `${num1} ${op} ${num2} = ${formattedResult}`;
     history.push(calculation);
+    saveHistory(); 
     updateHistoryDisplay();
 }
 
-/**
- * Renders the history list in the UI.
- */
 function updateHistoryDisplay() {
     historyList.innerHTML = '';
     
-    // Display newest history entries first
     const reversedHistory = [...history].reverse(); 
 
     reversedHistory.forEach((item, index) => {
@@ -228,58 +245,42 @@ function updateHistoryDisplay() {
     });
 }
 
-/**
- * Clears all entries from the history.
- */
 function clearAllHistory() {
     history = [];
+    saveHistory(); 
     updateHistoryDisplay();
 }
 
-/**
- * Deletes a specific history item by index.
- */
 function deleteHistoryItem(index) {
     history.splice(index, 1);
+    saveHistory(); 
     updateHistoryDisplay();
 }
 
 // --- RGB Background Effect ---
 
-/**
- * Generates a smooth transition between RGB colors based on mouse position.
- * The colors change based on the mouse's X and Y coordinates relative to the viewport.
- * * @param {number} x - Mouse X coordinate
- * @param {number} y - Mouse Y coordinate
- */
 function updateBackgroundRGB(x, y) {
     const width = window.innerWidth;
     const height = window.innerHeight;
 
-    // Map X and Y coordinates to RGB values (0-255)
-    // Red and Green values are based on X and Y position
     const r = Math.floor((x / width) * 255);
     const g = Math.floor((y / height) * 255);
     
-    // Blue value is based on the inverse of the mouse distance from the center
     const centerX = width / 2;
     const centerY = height / 2;
     const distance = Math.sqrt(Math.pow(x - centerX, 2) + Math.pow(y - centerY, 2));
     const maxDistance = Math.sqrt(Math.pow(centerX, 2) + Math.pow(centerY, 2));
     const b = Math.floor((1 - (distance / maxDistance)) * 255);
 
-    // Apply the RGB color to the body
     document.body.style.backgroundColor = `rgb(${r}, ${g}, ${b})`;
 }
 
-// Add event listener to the entire document for mouse movement
 document.addEventListener('mousemove', (e) => {
     updateBackgroundRGB(e.clientX, e.clientY);
 });
 
 // --- Event Listeners ---
 
-// Attach event listener to the button container
 buttons.addEventListener('click', (event) => {
     const target = event.target;
     
@@ -287,7 +288,6 @@ buttons.addEventListener('click', (event) => {
         return;
     }
 
-    // Determine the action based on the button class
     if (target.classList.contains('number') || target.classList.contains('zero') || target.classList.contains('decimal')) {
         inputNumber(target.textContent);
     } else if (target.classList.contains('operator')) {
